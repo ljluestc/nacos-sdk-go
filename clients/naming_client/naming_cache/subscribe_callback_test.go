@@ -55,20 +55,20 @@ func TestEventDispatcher_AddCallbackFuncs(t *testing.T) {
 		Clusters:    []string{"default"},
 		GroupName:   "public",
 		SubscribeCallback: func(services []model.Instance, err error) {
-			fmt.Println(util.ToJsonString(ed.callbackFuncMap))
+			fmt.Println(util.ToJsonString(services))
 		},
 	}
 	clusterSelector := NewClusterSelector(param.Clusters)
 	callbackWrapper := NewSubscribeCallbackFuncWrapper(clusterSelector, &param.SubscribeCallback)
 	ed.AddCallbackFunc(util.GetGroupName(param.ServiceName, param.GroupName), strings.Join(param.Clusters, ","), callbackWrapper)
 	key := util.GetServiceCacheKey(util.GetGroupName(param.ServiceName, param.GroupName), strings.Join(param.Clusters, ","))
-	for k, v := range ed.callbackFuncMap.Items() {
+	ed.callbackFuncMap.Range(func(k, v interface{}) bool {
 		assert.Equal(t, key, k, "key should be equal!")
 		funcs := v.([]*SubscribeCallbackFuncWrapper)
 		assert.Equal(t, len(funcs), 1)
 		assert.Equal(t, funcs[0].CallbackFunc, &param.SubscribeCallback, "callback function must be equal!")
-
-	}
+		return true
+	})
 }
 
 func TestEventDispatcher_RemoveCallbackFuncs(t *testing.T) {
@@ -103,7 +103,7 @@ func TestEventDispatcher_RemoveCallbackFuncs(t *testing.T) {
 	clusterSelector := NewClusterSelector(param.Clusters)
 	callbackWrapper := NewSubscribeCallbackFuncWrapper(clusterSelector, &param.SubscribeCallback)
 	ed.AddCallbackFunc(util.GetGroupName(param.ServiceName, param.GroupName), strings.Join(param.Clusters, ","), callbackWrapper)
-	assert.Equal(t, len(ed.callbackFuncMap.Items()), 1, "callback funcs map length should be 1")
+	assert.Equal(t, util.SyncMapLen(&ed.callbackFuncMap), 1, "callback funcs map length should be 1")
 
 	param2 := vo.SubscribeParam{
 		ServiceName: "Test",
@@ -116,22 +116,23 @@ func TestEventDispatcher_RemoveCallbackFuncs(t *testing.T) {
 	clusterSelector2 := NewClusterSelector(param2.Clusters)
 	callbackWrapper2 := NewSubscribeCallbackFuncWrapper(clusterSelector2, &param2.SubscribeCallback)
 	ed.AddCallbackFunc(util.GetGroupName(param2.ServiceName, param2.GroupName), strings.Join(param2.Clusters, ","), callbackWrapper2)
-	assert.Equal(t, len(ed.callbackFuncMap.Items()), 1, "callback funcs map length should be 2")
+	assert.Equal(t, util.SyncMapLen(&ed.callbackFuncMap), 1, "callback funcs map length should be 2")
 
-	for k, v := range ed.callbackFuncMap.Items() {
+	ed.callbackFuncMap.Range(func(k, v interface{}) bool {
 		log.Printf("key:%s,%d", k, len(v.([]*SubscribeCallbackFuncWrapper)))
-	}
+		return true
+	})
 
 	ed.RemoveCallbackFunc(util.GetGroupName(param2.ServiceName, param2.GroupName), strings.Join(param2.Clusters, ","), callbackWrapper2)
 
 	key := util.GetServiceCacheKey(util.GetGroupName(param.ServiceName, param.GroupName), strings.Join(param.Clusters, ","))
-	for k, v := range ed.callbackFuncMap.Items() {
+	ed.callbackFuncMap.Range(func(k, v interface{}) bool {
 		assert.Equal(t, key, k, "key should be equal!")
 		funcs := v.([]*SubscribeCallbackFuncWrapper)
 		assert.Equal(t, len(funcs), 1)
 		assert.Equal(t, funcs[0].CallbackFunc, &param.SubscribeCallback, "callback function must be equal!")
-
-	}
+		return true
+	})
 }
 
 func TestSubscribeCallback_ServiceChanged(t *testing.T) {
@@ -212,7 +213,7 @@ func TestSubscribeCallback_RemoveCallbackFunc(t *testing.T) {
 
 	// Check if only the second callback remains
 	cacheKey := util.GetServiceCacheKey(util.GetGroupName(serviceName, groupName), clusters)
-	funcs, ok := ed.callbackFuncMap.Get(cacheKey)
+	funcs, ok := ed.callbackFuncMap.Load(cacheKey)
 	if !ok || len(funcs.([]*SubscribeCallbackFuncWrapper)) != 1 {
 		t.Errorf("Expected 1 callback function, got %d", len(funcs.([]*SubscribeCallbackFuncWrapper)))
 	}
@@ -222,7 +223,7 @@ func TestSubscribeCallback_RemoveCallbackFunc(t *testing.T) {
 	ed.RemoveCallbackFunc(util.GetGroupName(serviceName, groupName), clusters, callbackWrapper2)
 
 	// Check if no callbacks remain
-	funcs, ok = ed.callbackFuncMap.Get(cacheKey)
+	funcs, ok = ed.callbackFuncMap.Load(cacheKey)
 	if ok && len(funcs.([]*SubscribeCallbackFuncWrapper)) != 0 {
 		t.Errorf("Expected 0 callback functions, got %d", len(funcs.([]*func(services []model.Instance, err error))))
 	}

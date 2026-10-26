@@ -19,24 +19,23 @@ package naming_cache
 import (
 	"sync"
 
-	"github.com/nacos-group/nacos-sdk-go/v2/clients/cache"
 	"github.com/nacos-group/nacos-sdk-go/v2/common/logger"
 	"github.com/nacos-group/nacos-sdk-go/v2/model"
 	"github.com/nacos-group/nacos-sdk-go/v2/util"
 )
 
 type SubscribeCallback struct {
-	callbackFuncMap cache.ConcurrentMap
+	callbackFuncMap sync.Map
 	mux             *sync.Mutex
 }
 
 func NewSubscribeCallback() *SubscribeCallback {
-	return &SubscribeCallback{callbackFuncMap: cache.NewConcurrentMap(), mux: new(sync.Mutex)}
+	return &SubscribeCallback{mux: new(sync.Mutex)}
 }
 
 func (ed *SubscribeCallback) IsSubscribed(serviceName, clusters string) bool {
 	key := util.GetServiceCacheKey(serviceName, clusters)
-	funcs, ok := ed.callbackFuncMap.Get(key)
+	funcs, ok := ed.callbackFuncMap.Load(key)
 	if ok {
 		return len(funcs.([]*SubscribeCallbackFuncWrapper)) > 0
 	}
@@ -48,18 +47,18 @@ func (ed *SubscribeCallback) AddCallbackFunc(serviceName string, clusters string
 	ed.mux.Lock()
 	defer ed.mux.Unlock()
 	var funcSlice []*SubscribeCallbackFuncWrapper
-	old, ok := ed.callbackFuncMap.Get(key)
+	old, ok := ed.callbackFuncMap.Load(key)
 	if ok {
 		funcSlice = append(funcSlice, old.([]*SubscribeCallbackFuncWrapper)...)
 	}
 	funcSlice = append(funcSlice, callbackWrapper)
-	ed.callbackFuncMap.Set(key, funcSlice)
+	ed.callbackFuncMap.Store(key, funcSlice)
 }
 
 func (ed *SubscribeCallback) RemoveCallbackFunc(serviceName string, clusters string, callbackWrapper *SubscribeCallbackFuncWrapper) {
 	logger.Info("removing " + serviceName + " with " + clusters + " to listener map")
 	key := util.GetServiceCacheKey(serviceName, clusters)
-	funcs, ok := ed.callbackFuncMap.Get(key)
+	funcs, ok := ed.callbackFuncMap.Load(key)
 	if ok && funcs != nil {
 		var newFuncs []*SubscribeCallbackFuncWrapper
 		for _, funcItem := range funcs.([]*SubscribeCallbackFuncWrapper) {
@@ -67,13 +66,13 @@ func (ed *SubscribeCallback) RemoveCallbackFunc(serviceName string, clusters str
 				newFuncs = append(newFuncs, funcItem)
 			}
 		}
-		ed.callbackFuncMap.Set(key, newFuncs)
+		ed.callbackFuncMap.Store(key, newFuncs)
 	}
 
 }
 
 func (ed *SubscribeCallback) ServiceChanged(cacheKey string, service *model.Service) {
-	funcs, ok := ed.callbackFuncMap.Get(cacheKey)
+	funcs, ok := ed.callbackFuncMap.Load(cacheKey)
 	if ok {
 		for _, funcItem := range funcs.([]*SubscribeCallbackFuncWrapper) {
 			funcItem.notifyListener(service)

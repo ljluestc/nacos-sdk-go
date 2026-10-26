@@ -41,7 +41,7 @@ func TestBeatReactor_AddBeatInfo(t *testing.T) {
 	}
 	br.AddBeatInfo(util.GetGroupName(serviceName, groupName), beatInfo)
 	key := buildKey(util.GetGroupName(serviceName, groupName), beatInfo.Ip, beatInfo.Port)
-	result, ok := br.beatMap.Get(key)
+	result, ok := br.beatMap.Load(key)
 	assert.Equal(t, ok, true, "key should exists!")
 	assert.ObjectsAreEqual(result.(*model.BeatInfo), beatInfo)
 }
@@ -70,8 +70,8 @@ func TestBeatReactor_RemoveBeatInfo(t *testing.T) {
 	br.AddBeatInfo(util.GetGroupName(serviceName, groupName), beatInfo2)
 	br.RemoveBeatInfo(util.GetGroupName(serviceName, groupName), "127.0.0.1", 8080)
 	key := buildKey(util.GetGroupName(serviceName, groupName), beatInfo2.Ip, beatInfo2.Port)
-	result, ok := br.beatMap.Get(key)
-	assert.Equal(t, br.beatMap.Count(), 1, "beatinfo map length should be 1")
+	result, ok := br.beatMap.Load(key)
+	assert.Equal(t, util.SyncMapLen(br.beatMap), 1, "beatinfo map length should be 1")
 	assert.Equal(t, ok, true, "key should exists!")
 	assert.ObjectsAreEqual(result.(*model.BeatInfo), beatInfo2)
 

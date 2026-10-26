@@ -270,13 +270,13 @@ func (c *ConfigChangeNotifyRequestHandler) RequestReply(request rpc_request.IReq
 
 	cacheKey := util.GetConfigCacheKey(configChangeNotifyRequest.DataId, configChangeNotifyRequest.Group,
 		configChangeNotifyRequest.Tenant)
-	data, ok := c.client.cacheMap.Get(cacheKey)
+	data, ok := c.client.cacheMap.Load(cacheKey)
 	if !ok {
 		return nil
 	}
 	cData := data.(cacheData)
 	cData.isSyncWithServer = false
-	c.client.cacheMap.Set(cacheKey, cData)
+	c.client.cacheMap.Store(cacheKey, cData)
 	c.client.asyncNotifyListenConfig()
 	return &rpc_response.NotifySubscriberResponse{
 		Response: &rpc_response.Response{ResultCode: constant.RESPONSE_CODE_SUCCESS},

@@ -32,6 +32,17 @@ import (
 	"github.com/nacos-group/nacos-sdk-go/v2/model"
 )
 
+// SyncMapLen returns the number of entries in m. sync.Map does not track its
+// size, so this walks the map and is O(n).
+func SyncMapLen(m *sync.Map) int {
+	n := 0
+	m.Range(func(_, _ interface{}) bool {
+		n++
+		return true
+	})
+	return n
+}
+
 func CurrentMillis() int64 {
 	return time.Now().UnixNano() / 1e6
 }

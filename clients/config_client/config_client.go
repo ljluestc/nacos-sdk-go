@@ -57,7 +57,7 @@ type ConfigClient struct {
 	configProxy              IConfigProxy
 	configCacheDir           string
 	lastAllSyncTime          time.Time
-	cacheMap                 cache.ConcurrentMap
+	cacheMap                 sync.Map
 	uid                      string
 	listenExecute            chan struct{}
 	isClosed                 bool
@@ -86,7 +86,7 @@ type cacheDataListener struct {
 
 func (cacheData *cacheData) executeListener() {
 	cacheData.cacheDataListener.lastMd5 = cacheData.md5
-	cacheData.configClient.cacheMap.Set(util.GetConfigCacheKey(cacheData.dataId, cacheData.group, cacheData.tenant), *cacheData)
+	cacheData.configClient.cacheMap.Store(util.GetConfigCacheKey(cacheData.dataId, cacheData.group, cacheData.tenant), *cacheData)
 
 	param := &vo.ConfigParam{
 		DataId:           cacheData.dataId,
@@ -148,7 +148,6 @@ func NewConfigClientWithRamCredentialProvider(nc nacos_client.INacosClient, prov
 	}
 
 	config.uid = uid.String()
-	config.cacheMap = cache.NewConcurrentMap()
 	config.listenExecute = make(chan struct{})
 	config.startInternal()
 	return config, err
@@ -300,7 +299,7 @@ func (client *ConfigClient) CancelListenConfig(param vo.ConfigParam) (err error)
 		logger.Errorf("[checkConfigInfo.GetClientConfig] failed,err:%+v", err)
 		return
 	}
-	client.cacheMap.Remove(util.GetConfigCacheKey(param.DataId, param.Group, clientConfig.NamespaceId))
+	client.cacheMap.Delete(util.GetConfigCacheKey(param.DataId, param.Group, clientConfig.NamespaceId))
 	logger.Infof("Cancel listen config DataId:%s Group:%s", param.DataId, param.Group)
 	return err
 }
@@ -322,7 +321,7 @@ func (client *ConfigClient) ListenConfig(param vo.ConfigParam) (err error) {
 
 	key := util.GetConfigCacheKey(param.DataId, param.Group, clientConfig.NamespaceId)
 	var cData cacheData
-	if v, ok := client.cacheMap.Get(key); ok {
+	if v, ok := client.cacheMap.Load(key); ok {
 		cData = v.(cacheData)
 		cData.isInitializing = true
 	} else {
@@ -352,11 +351,11 @@ func (client *ConfigClient) ListenConfig(param vo.ConfigParam) (err error) {
 			md5:               md5Str,
 			cacheDataListener: listener,
 			encryptedDataKey:  encryptedDataKey,
-			taskId:            client.cacheMap.Count() / perTaskConfigSize,
+			taskId:            util.SyncMapLen(&client.cacheMap) / perTaskConfigSize,
 			configClient:      client,
 		}
 	}
-	client.cacheMap.Set(key, cData)
+	client.cacheMap.Store(key, cData)
 	return
 }
 
@@ -461,23 +460,24 @@ func (client *ConfigClient) executeConfigListen() {
 		for _, v := range response.ChangedConfigs {
 			changeKey := util.GetConfigCacheKey(v.DataId, v.Group, v.Tenant)
 			changeKeys[changeKey] = struct{}{}
-			if value, ok := client.cacheMap.Get(changeKey); ok {
+			if value, ok := client.cacheMap.Load(changeKey); ok {
 				cData := value.(cacheData)
 				client.refreshContentAndCheck(cData, !cData.isInitializing)
 			}
 		}
 
-		for _, v := range client.cacheMap.Items() {
+		client.cacheMap.Range(func(_, v interface{}) bool {
 			data := v.(cacheData)
 			changeKey := util.GetConfigCacheKey(data.dataId, data.group, data.tenant)
 			if _, ok := changeKeys[changeKey]; !ok {
 				data.isSyncWithServer = true
-				client.cacheMap.Set(changeKey, data)
-				continue
+				client.cacheMap.Store(changeKey, data)
+				return true
 			}
 			data.isInitializing = true
-			client.cacheMap.Set(changeKey, data)
-		}
+			client.cacheMap.Store(changeKey, data)
+			return true
+		})
 
 	}
 	if needAllSync {
@@ -487,7 +487,7 @@ func (client *ConfigClient) executeConfigListen() {
 	if hasChangedKeys {
 		client.asyncNotifyListenConfig()
 	}
-	monitor.GetListenConfigCountMonitor().Set(float64(client.cacheMap.Count()))
+	monitor.GetListenConfigCountMonitor().Set(float64(util.SyncMapLen(&client.cacheMap)))
 }
 
 func buildConfigBatchListenRequest(caches []cacheData) *rpc_request.ConfigBatchListenRequest {
@@ -530,10 +530,10 @@ func (client *ConfigClient) refreshContentAndCheck(cacheData cacheData, notify b
 func (client *ConfigClient) buildListenTask(needAllSync bool) map[int][]cacheData {
 	listenTaskMap := make(map[int][]cacheData, 8)
 
-	for _, v := range client.cacheMap.Items() {
+	client.cacheMap.Range(func(_, v interface{}) bool {
 		data, ok := v.(cacheData)
 		if !ok {
-			continue
+			return true
 		}
 
 		if data.isSyncWithServer {
@@ -541,11 +541,12 @@ func (client *ConfigClient) buildListenTask(needAllSync bool) map[int][]cacheDat
 				data.executeListener()
 			}
 			if !needAllSync {
-				continue
+				return true
 			}
 		}
 		listenTaskMap[data.taskId] = append(listenTaskMap[data.taskId], data)
-	}
+		return true
+	})
 	return listenTaskMap
 }
 

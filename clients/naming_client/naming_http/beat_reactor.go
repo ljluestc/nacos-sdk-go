@@ -30,7 +30,6 @@ import (
 	"github.com/nacos-group/nacos-sdk-go/v2/common/monitor"
 
 	"github.com/buger/jsonparser"
-	"github.com/nacos-group/nacos-sdk-go/v2/clients/cache"
 	"github.com/nacos-group/nacos-sdk-go/v2/common/constant"
 	"github.com/nacos-group/nacos-sdk-go/v2/common/logger"
 	"github.com/nacos-group/nacos-sdk-go/v2/common/nacos_server"
@@ -41,11 +40,11 @@ import (
 
 type BeatReactor struct {
 	ctx                 context.Context
-	beatMap             cache.ConcurrentMap
+	beatMap             *sync.Map
 	nacosServer         *nacos_server.NacosServer
 	beatThreadCount     int
 	beatThreadSemaphore *semaphore.Weighted
-	beatRecordMap       cache.ConcurrentMap
+	beatRecordMap       *sync.Map
 	clientCfg           constant.ClientConfig
 	mux                 *sync.Mutex
 }
@@ -55,11 +54,11 @@ const DefaultBeatThreadNum = 20
 func NewBeatReactor(ctx context.Context, clientCfg constant.ClientConfig, nacosServer *nacos_server.NacosServer) BeatReactor {
 	br := BeatReactor{}
 	br.ctx = ctx
-	br.beatMap = cache.NewConcurrentMap()
+	br.beatMap = new(sync.Map)
 	br.nacosServer = nacosServer
 	br.clientCfg = clientCfg
 	br.beatThreadCount = DefaultBeatThreadNum
-	br.beatRecordMap = cache.NewConcurrentMap()
+	br.beatRecordMap = new(sync.Map)
 	br.beatThreadSemaphore = semaphore.NewWeighted(int64(br.beatThreadCount))
 	br.mux = new(sync.Mutex)
 	return br
@@ -74,14 +73,14 @@ func (br *BeatReactor) AddBeatInfo(serviceName string, beatInfo *model.BeatInfo)
 	k := buildKey(serviceName, beatInfo.Ip, beatInfo.Port)
 	defer br.mux.Unlock()
 	br.mux.Lock()
-	if data, ok := br.beatMap.Get(k); ok {
+	if data, ok := br.beatMap.Load(k); ok {
 		beatInfo = data.(*model.BeatInfo)
 		atomic.StoreInt32(&beatInfo.State, int32(model.StateShutdown))
-		br.beatMap.Remove(k)
+		br.beatMap.Delete(k)
 	}
-	br.beatMap.Set(k, beatInfo)
+	br.beatMap.Store(k, beatInfo)
 	beatInfo.Metadata = util.DeepCopyMap(beatInfo.Metadata)
-	monitor.GetDom2BeatSizeMonitor().Set(float64(br.beatMap.Count()))
+	monitor.GetDom2BeatSizeMonitor().Set(float64(util.SyncMapLen(br.beatMap)))
 	go br.sendInstanceBeat(k, beatInfo)
 }
 
@@ -90,13 +89,13 @@ func (br *BeatReactor) RemoveBeatInfo(serviceName string, ip string, port uint64
 	k := buildKey(serviceName, ip, port)
 	defer br.mux.Unlock()
 	br.mux.Lock()
-	data, exist := br.beatMap.Get(k)
+	data, exist := br.beatMap.Load(k)
 	if exist {
 		beatInfo := data.(*model.BeatInfo)
 		atomic.StoreInt32(&beatInfo.State, int32(model.StateShutdown))
 	}
-	monitor.GetDom2BeatSizeMonitor().Set(float64(br.beatMap.Count()))
-	br.beatMap.Remove(k)
+	monitor.GetDom2BeatSizeMonitor().Set(float64(util.SyncMapLen(br.beatMap)))
+	br.beatMap.Delete(k)
 
 }
 
@@ -125,7 +124,7 @@ func (br *BeatReactor) sendInstanceBeat(k string, beatInfo *model.BeatInfo) {
 			beatInfo.Period = time.Duration(time.Millisecond.Nanoseconds() * beatInterval)
 		}
 
-		br.beatRecordMap.Set(k, util.CurrentMillis())
+		br.beatRecordMap.Store(k, util.CurrentMillis())
 		br.beatThreadSemaphore.Release(1)
 		t.Reset(beatInfo.Period)
 		select {

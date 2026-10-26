@@ -141,7 +141,12 @@ func (us *PushReceiver) handleClient(conn *net.UDPConn) {
 	} else if pushData.PushType == "dump" {
 		ack["type"] = "dump-ack"
 		ack["lastRefTime"] = strconv.FormatInt(pushData.LastRefTime, 10)
-		ack["data"] = util.ToJsonString(us.serviceInfoHolder.ServiceInfoMap)
+		services := make(map[string]interface{})
+		us.serviceInfoHolder.ServiceInfoMap.Range(func(k, v interface{}) bool {
+			services[k.(string)] = v
+			return true
+		})
+		ack["data"] = util.ToJsonString(services)
 	} else {
 		ack["type"] = "unknow-ack"
 		ack["lastRefTime"] = strconv.FormatInt(pushData.LastRefTime, 10)

@@ -21,7 +21,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nacos-group/nacos-sdk-go/v2/clients/cache"
 	"github.com/nacos-group/nacos-sdk-go/v2/common/remote/rpc/rpc_request"
 	"github.com/nacos-group/nacos-sdk-go/v2/common/remote/rpc/rpc_response"
 	"github.com/nacos-group/nacos-sdk-go/v2/model"
@@ -40,9 +39,7 @@ func TestNewConfigConnectionEventListener(t *testing.T) {
 }
 
 func TestOnDisConnectWithMock(t *testing.T) {
-	client := &ConfigClient{
-		cacheMap: cache.NewConcurrentMap(),
-	}
+	client := &ConfigClient{}
 
 	data1 := cacheData{
 		dataId:           "dataId1",
@@ -72,17 +69,17 @@ func TestOnDisConnectWithMock(t *testing.T) {
 	key2 := util.GetConfigCacheKey(data2.dataId, data2.group, data2.tenant)
 	key3 := util.GetConfigCacheKey(data3.dataId, data3.group, data3.tenant)
 
-	client.cacheMap.Set(key1, data1)
-	client.cacheMap.Set(key2, data2)
-	client.cacheMap.Set(key3, data3)
+	client.cacheMap.Store(key1, data1)
+	client.cacheMap.Store(key2, data2)
+	client.cacheMap.Store(key3, data3)
 
 	listener := NewConfigConnectionEventListener(client, "1")
 
 	listener.OnDisConnect()
 
-	item1, _ := client.cacheMap.Get(key1)
-	item2, _ := client.cacheMap.Get(key2)
-	item3, _ := client.cacheMap.Get(key3)
+	item1, _ := client.cacheMap.Load(key1)
+	item2, _ := client.cacheMap.Load(key2)
+	item3, _ := client.cacheMap.Load(key3)
 
 	updatedData1 := item1.(cacheData)
 	updatedData2 := item2.(cacheData)
@@ -139,7 +136,6 @@ func TestReconnectionFlow(t *testing.T) {
 	client := &ConfigClient{
 		ctx:           ctx,
 		configProxy:   &MockConfigProxy{},
-		cacheMap:      cache.NewConcurrentMap(),
 		listenExecute: listenChan,
 	}
 
@@ -165,16 +161,16 @@ func TestReconnectionFlow(t *testing.T) {
 	}
 
 	key1 := util.GetConfigCacheKey(data1.dataId, data1.group, data1.tenant)
-	client.cacheMap.Set(key1, data1)
+	client.cacheMap.Store(key1, data1)
 
 	listener := NewConfigConnectionEventListener(client, "1")
 
-	initialData, _ := client.cacheMap.Get(key1)
+	initialData, _ := client.cacheMap.Load(key1)
 	assert.True(t, initialData.(cacheData).isSyncWithServer, "initial data should be sync with server")
 
 	listener.OnDisConnect()
 
-	afterDisconnectData, _ := client.cacheMap.Get(key1)
+	afterDisconnectData, _ := client.cacheMap.Load(key1)
 	assert.False(t, afterDisconnectData.(cacheData).isSyncWithServer, "disconnect should set isSyncWithServer to false")
 
 	listener.OnConnected()

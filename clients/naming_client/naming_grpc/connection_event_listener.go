@@ -18,11 +18,11 @@ package naming_grpc
 
 import (
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/nacos-group/nacos-sdk-go/v2/clients/naming_client/naming_proxy"
 
-	"github.com/nacos-group/nacos-sdk-go/v2/clients/cache"
 	"github.com/nacos-group/nacos-sdk-go/v2/common/constant"
 	"github.com/nacos-group/nacos-sdk-go/v2/common/logger"
 	"github.com/nacos-group/nacos-sdk-go/v2/model"
@@ -31,15 +31,13 @@ import (
 
 type ConnectionEventListener struct {
 	clientProxy              naming_proxy.INamingProxy
-	registeredInstanceCached cache.ConcurrentMap
-	subscribes               cache.ConcurrentMap
+	registeredInstanceCached sync.Map
+	subscribes               sync.Map
 }
 
 func NewConnectionEventListener(clientProxy naming_proxy.INamingProxy) *ConnectionEventListener {
 	return &ConnectionEventListener{
-		clientProxy:              clientProxy,
-		registeredInstanceCached: cache.NewConcurrentMap(),
-		subscribes:               cache.NewConcurrentMap(),
+		clientProxy: clientProxy,
 	}
 }
 
@@ -58,13 +56,12 @@ func (c *ConnectionEventListener) OnDisConnect() {
 // reconnect redo retries them and IsSubscriberRegistered no longer reports
 // them as subscribed.
 func (c *ConnectionEventListener) SubscriberOnDisconnect() {
-	for _, key := range c.subscribes.Keys() {
-		if entry, ok := c.subscribes.Get(key); ok {
-			if redoEntry, ok := entry.(*subscriberRedoEntry); ok {
-				redoEntry.registered.Store(false)
-			}
+	c.subscribes.Range(func(_, entry interface{}) bool {
+		if redoEntry, ok := entry.(*subscriberRedoEntry); ok {
+			redoEntry.registered.Store(false)
 		}
-	}
+		return true
+	})
 }
 
 func (c *ConnectionEventListener) redoSubscribe() {
@@ -73,7 +70,8 @@ func (c *ConnectionEventListener) redoSubscribe() {
 		logger.Error("redo subscribe clientProxy type error")
 		return
 	}
-	for _, key := range c.subscribes.Keys() {
+	c.subscribes.Range(func(k, _ interface{}) bool {
+		key := k.(string)
 		info := strings.Split(key, constant.SERVICE_INFO_SPLITER)
 		var err error
 		var service model.Service
@@ -84,49 +82,47 @@ func (c *ConnectionEventListener) redoSubscribe() {
 		}
 		if err != nil {
 			logger.Warnf("redo subscribe service:%s faild:%+v", info[1], err)
-			continue
+			return true
 		}
 		grpcProxy.serviceInfoHolder.ProcessService(&service)
-	}
+		return true
+	})
 }
 
 func (c *ConnectionEventListener) redoRegisterEachService() {
-	for k, v := range c.registeredInstanceCached.Items() {
-		info := strings.Split(k, constant.SERVICE_INFO_SPLITER)
+	c.registeredInstanceCached.Range(func(k, v interface{}) bool {
+		info := strings.Split(k.(string), constant.SERVICE_INFO_SPLITER)
 		serviceName := info[1]
 		groupName := info[0]
 		if instance, ok := v.(model.Instance); ok {
 			if _, err := c.clientProxy.RegisterInstance(serviceName, groupName, instance); err != nil {
 				logger.Warnf("redo register service:%s groupName:%s faild:%s", info[1], info[0], err.Error())
-				continue
+				return true
 			}
 		}
 		if instances, ok := v.([]model.Instance); ok {
 			if _, err := c.clientProxy.BatchRegisterInstance(serviceName, groupName, instances); err != nil {
 				logger.Warnf("redo batch register service:%s groupName:%s faild:%s", info[1], info[0], err.Error())
-				continue
+				return true
 			}
 		}
-	}
+		return true
+	})
 }
 
 func (c *ConnectionEventListener) CacheInstanceForRedo(serviceName, groupName string, instance model.Instance) {
 	key := util.GetGroupName(serviceName, groupName)
-	c.registeredInstanceCached.Set(key, instance)
+	c.registeredInstanceCached.Store(key, instance)
 }
 
 func (c *ConnectionEventListener) CacheInstancesForRedo(serviceName, groupName string, instances []model.Instance) {
 	key := util.GetGroupName(serviceName, groupName)
-	c.registeredInstanceCached.Set(key, instances)
+	c.registeredInstanceCached.Store(key, instances)
 }
 
 func (c *ConnectionEventListener) RemoveInstanceForRedo(serviceName, groupName string, instance model.Instance) {
 	key := util.GetGroupName(serviceName, groupName)
-	_, ok := c.registeredInstanceCached.Get(key)
-	if !ok {
-		return
-	}
-	c.registeredInstanceCached.Remove(key)
+	c.registeredInstanceCached.Delete(key)
 }
 
 // subscriberRedoEntry tracks a cached subscription redo intent along with
@@ -141,19 +137,19 @@ type subscriberRedoEntry struct {
 func (c *ConnectionEventListener) CacheSubscriberForRedo(fullServiceName, clusters string) {
 	key := util.GetServiceCacheKey(fullServiceName, clusters)
 	if !c.IsSubscriberCached(key) {
-		c.subscribes.Set(key, &subscriberRedoEntry{})
+		c.subscribes.Store(key, &subscriberRedoEntry{})
 	}
 }
 
 func (c *ConnectionEventListener) IsSubscriberCached(key string) bool {
-	_, ok := c.subscribes.Get(key)
+	_, ok := c.subscribes.Load(key)
 	return ok
 }
 
 // SubscriberRegistered marks the cached redo entry as confirmed after a
 // successful subscribe response.
 func (c *ConnectionEventListener) SubscriberRegistered(fullServiceName, clusters string) {
-	if entry, ok := c.subscribes.Get(util.GetServiceCacheKey(fullServiceName, clusters)); ok {
+	if entry, ok := c.subscribes.Load(util.GetServiceCacheKey(fullServiceName, clusters)); ok {
 		if redoEntry, ok := entry.(*subscriberRedoEntry); ok {
 			redoEntry.registered.Store(true)
 		}
@@ -164,7 +160,7 @@ func (c *ConnectionEventListener) SubscriberRegistered(fullServiceName, clusters
 // by the server. A redo entry cached before a failed subscribe request is
 // not considered registered.
 func (c *ConnectionEventListener) IsSubscriberRegistered(key string) bool {
-	entry, ok := c.subscribes.Get(key)
+	entry, ok := c.subscribes.Load(key)
 	if !ok {
 		return false
 	}
@@ -173,5 +169,5 @@ func (c *ConnectionEventListener) IsSubscriberRegistered(key string) bool {
 }
 
 func (c *ConnectionEventListener) RemoveSubscriberForRedo(fullServiceName, clusters string) {
-	c.subscribes.Remove(util.GetServiceCacheKey(fullServiceName, clusters))
+	c.subscribes.Delete(util.GetServiceCacheKey(fullServiceName, clusters))
 }

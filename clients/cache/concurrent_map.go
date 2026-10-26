@@ -35,6 +35,10 @@ var SHARD_COUNT = 32
 
 // A "thread" safe map of type string:Anything.
 // To avoid lock bottlenecks this map is dived to several (SHARD_COUNT) map shards.
+//
+// Deprecated: the SDK no longer uses ConcurrentMap internally; use sync.Map
+// instead. Iter, IterBuffered and Keys start one goroutine per shard on every
+// call, which is wasteful on hot paths.
 type ConcurrentMap []*ConcurrentMapShared
 
 // A "thread" safe string to anything map.
